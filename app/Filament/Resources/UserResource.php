@@ -4,14 +4,17 @@ namespace App\Filament\Resources;
 
 use App\Filament\Resources\UserResource\Pages;
 use App\Filament\Resources\UserResource\RelationManagers;
+use App\Jobs\ExportStudentsJob;
 use App\Models\User;
 use Filament\Forms;
 use Filament\Forms\Form;
+use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\SoftDeletingScope;
+use Illuminate\Support\Facades\Cache;
 
 class UserResource extends Resource
 {
@@ -39,14 +42,15 @@ class UserResource extends Resource
                 Forms\Components\TextInput::make('password')
                     ->label('Senha')
                     ->password()
-                    ->dehydrated(fn ($state) => filled($state))
-                    ->required(fn (string $context): bool => $context === 'create'),
+                    ->dehydrated(fn($state) => filled($state))
+                    ->required(fn(string $context): bool => $context === 'create'),
             ]);
     }
 
     public static function table(Table $table): Table
     {
         return $table
+            ->poll('30s')
             ->columns([
                 Tables\Columns\TextColumn::make('name')
                     ->label('Nome')
@@ -72,6 +76,37 @@ class UserResource extends Resource
             ])
             ->actions([
                 Tables\Actions\EditAction::make(),
+            ])
+            ->headerActions([
+                Tables\Actions\Action::make('exportar_alunos')
+                    ->label(fn (): string => Cache::has(ExportStudentsJob::lockKey(auth()->id()))
+                        ? 'Exportação em andamento...'
+                        : 'Exportar Alunos')
+                    ->icon('heroicon-o-arrow-down-tray')
+                    ->color('success')
+                    ->disabled(fn (): bool => Cache::has(ExportStudentsJob::lockKey(auth()->id())))
+                    ->extraAttributes(['wire:poll.5s.visible' => ''])
+                    ->action(function () {
+                        $key = ExportStudentsJob::lockKey(auth()->id());
+
+                        if (! Cache::add($key, true, now()->addMinutes(2))) {
+                            Notification::make()
+                                ->title('Já existe uma exportação em andamento')
+                                ->body('Aguarde a conclusão da exportação atual antes de iniciar outra.')
+                                ->warning()
+                                ->send();
+
+                            return;
+                        }
+
+                        ExportStudentsJob::dispatch(auth()->id());
+
+                        Notification::make()
+                            ->title('Exportação iniciada')
+                            ->body('Dependendo do volume de dados, pode levar alguns minutos. Você receberá uma notificação quando o arquivo estiver pronto.')
+                            ->success()
+                            ->send();
+                    }),
             ])
             ->bulkActions([
                 Tables\Actions\BulkActionGroup::make([
