@@ -26,9 +26,13 @@ class ExportStudentsJob implements ShouldQueue
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     public int $timeout = 600;
+    public int $tries = 1;
+    public bool $deleteWhenMissingModels = true;
 
     private const LOCK_TTL_SECONDS = 120;
     private const HEARTBEAT_INTERVAL = 30;
+
+    private ?string $partialFilePath = null;
 
     public function __construct(
         private readonly int $userId
@@ -70,6 +74,7 @@ class ExportStudentsJob implements ShouldQueue
     {
         $filename = 'exports/alunos_' . now()->format('Ymd_His') . '_' . uniqid() . '.xlsx';
         $fullPath = storage_path('app/' . $filename);
+        $this->partialFilePath = $fullPath;
 
         if (!file_exists(dirname($fullPath))) {
             mkdir(dirname($fullPath), 0755, true);
@@ -188,6 +193,7 @@ class ExportStudentsJob implements ShouldQueue
 
     public function failed(Throwable $exception): void
     {
+        $this->cleanupPartialFile();
         $this->releaseLock();
 
         $recipient = User::find($this->userId);
@@ -201,5 +207,14 @@ class ExportStudentsJob implements ShouldQueue
             ->body('Ocorreu um erro ao gerar a planilha de alunos. Tente novamente.')
             ->danger()
             ->sendToDatabase($recipient);
+    }
+
+    private function cleanupPartialFile(): void
+    {
+        if ($this->partialFilePath && is_file($this->partialFilePath)) {
+            @unlink($this->partialFilePath);
+        }
+
+        $this->partialFilePath = null;
     }
 }

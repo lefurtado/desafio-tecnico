@@ -31,9 +31,16 @@
 - **Proteção de Path Traversal**: A rota de download valida o parâmetro `path`, rejeitando qualquer tentativa de acesso a arquivos fora da pasta `exports/`.
 - **Writer seguro**: O `Writer` do OpenSpout é encapsulado em um bloco `try/finally`, garantindo que o arquivo seja fechado corretamente mesmo em caso de erro.
 - **Renovação do lock**: O cache de controle do botão é renovado a cada 30 segundos durante o processamento, evitando que o botão seja liberado prematuramente em exportações longas.
+- **Política de retry e limpeza de arquivo parcial**: `$tries = 1` é declarado explicitamente porque a exportação é cara (minutos de execução) e quase sempre determinística — retentar cega duplicaria carga no banco e geraria arquivos órfãos. O caminho do arquivo em escrita é guardado em `partialFilePath`; no `failed()`, esse arquivo é removido antes de notificar o usuário, evitando que `.xlsx` corrompidos acumulem no disco em caso de exceção.
 
 ### Qualidade do Código
 
 - **Extração de Formatadores**: A formatação de CPF, RG e CEP foi extraída para a classe `App\Support\DocumentFormatter`, promovendo reutilização e testabilidade.
 - **Separação de Responsabilidades**: O job cuida apenas da geração do arquivo e da notificação; a rota cuida apenas do download; o resource cuida apenas do disparo.
 - **Padronização Laravel/Filament**: Uso de Notifications nativas do Filament, rotas web com middleware de autenticação e organização de código seguindo as convenções do framework.
+- **Limpeza automática**: O command `exports:prune` (agendado diariamente em `routes/console.php`) remove arquivos de `storage/app/exports/` mais antigos que o TTL do link assinado (24h), evitando crescimento indefinido do disco. Em produção, basta um `php artisan schedule:run` rodando via cron/supervisor.
+- **Testes automatizados**: A suíte cobre três camadas:
+    - `tests/Unit/DocumentFormatterTest.php` — lógica pura de formatação (CPF, RG, CEP), incluindo idempotência e tratamento de `NULL` (cenário real, já que as subqueries de documento e endereço retornam `NULL` quando o usuário não possui o registro relacionado).
+    - `tests/Feature/ExportDownloadRouteTest.php` — segurança da rota de download: redirecionamento sem autenticação, bloqueio sem assinatura válida, proteção contra path traversal (`..`) e contra acesso a arquivos fora de `exports/`, e download válido com URL assinada.
+    - `tests/Feature/ExportLockTest.php` — contrato do lock distribuído: chave por usuário, atomicidade do `Cache::add` (segunda tentativa falha) e liberação do lock + notificação de erro no `failed()`.
+    - Rodar tudo com `php artisan test`. Filtrar por classe com `--filter=NomeDoTeste`.
